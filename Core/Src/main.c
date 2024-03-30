@@ -58,6 +58,9 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN PV */
 static void imuPolling();
 static float tempConversion(uint8_t* byteTemp8);
+static float accData();
+static uint8_t accRange();
+static float accConversion(uint16_t* byteTemp16, uint8_t acc_range);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -267,7 +270,7 @@ static void MX_UART4_Init(void)
   /* USER CODE END UART4_Init 2 */
 
 }
-
+deks
 /**
   * @brief GPIO Initialization Function
   * @param None
@@ -368,6 +371,115 @@ static float tempConversion(uint8_t* byteTemp8){
 
 	return normal_temp;
 }
+
+static void accData(){
+
+	#define MESSAGE_LEN 7
+	#define TIMEOUT_DELAY 100
+	#define ACC_LSB_REG 0x22
+	#define READ_COMMAND_MASK 0x80
+
+	char uart_buf[50];
+	int uart_buf_len;
+	char uart_buf_fail[50];
+	int uart_buf_fail_len;
+	char uart_result_acc[50];
+	int uart_result_acc_len;
+
+	uart_buf_len = sprintf(uart_buf, "Begun \r\n");
+	HAL_UART_Transmit(&huart4, (uint8_t *)uart_buf, uart_buf_len, 100);
+
+
+	//Receive message is 3 long since the first byte is a dummy byte, second is the MSB, and third is LSB
+	const uint8_t TRANSMIT_MESSAGE[MESSAGE_LEN] = {ACC_LSB_REG | READ_COMMAND_MASK, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+	const uint8_t RECEIVE_MESSAGE[MESSAGE_LEN];
+	HAL_StatusTypeDef status;
+
+	uart_buf_fail_len = sprintf(uart_buf_fail, "Failure \r\n");
+
+	uint8_t acceleration_range = accRange();
+
+	//Setting the initial value for the CSB
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+
+	for(;;){
+
+	// According to the data sheet PS or Pin (#07) should be grounded for SPI and set to VDDIO for I2C.
+
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
+
+
+			//SPI command to read data from specific register
+			status = HAL_SPI_TransmitReceive(&hspi1, TRANSMIT_MESSAGE, RECEIVE_MESSAGE, MESSAGE_LEN, TIMEOUT_DELAY);
+
+
+			//Error to console if status is not OK
+			if(status!=HAL_OK){
+				HAL_UART_Transmit(&huart4, (uint8_t *)uart_buf_fail, uart_buf_fail_len, 100);
+			}
+
+
+			// SET CSB to Low
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+
+
+			// Temperature Conversions according to data sheet
+			float regular_acc = accConversion(RECEIVE_MESSAGE, acceleration_range);
+
+			//Printing temperature results to console
+			uart_result_acc_len = sprintf(uart_result_acc, "Acceleration: %.2f°C\r\n", regular_acc);
+			HAL_UART_Transmit(&huart4, (uint8_t *)uart_result_acc, uart_result_acc_len, 100);
+
+			vTaskDelay(pdMS_TO_TICKS(1280));
+	}
+
+}
+
+static uint8_t accRange(){
+	#define MESSAGE_LEN 2
+	#define TIMEOUT_DELAY 100
+	#define ACC_RANGE_REG 0x41
+	#define READ_COMMAND_MASK 0x80
+
+	const uint8_t TRANSMIT_MESSAGE[MESSAGE_LEN] = {ACC_RANGE_REG | READ_COMMAND_MASK, 0x00};
+	const uint8_t RECEIVE_MESSAGE[MESSAGE_LEN];
+
+	//Setting the initial value for the CSB
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
+
+
+	//SPI command to read data from specific register
+	HAL_SPI_TransmitReceive(&hspi1, TRANSMIT_MESSAGE, RECEIVE_MESSAGE, MESSAGE_LEN, TIMEOUT_DELAY);
+
+	// SET CSB to Low
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+
+
+	uint8_t acc_range = RECEIVE_MESSAGE[1];
+
+	//Maybe should include this, reserve command masking, acc_range &= 0xFC;
+
+	return acc_range;
+}
+
+static float accConversion(uint16_t* byteTemp16, uint8_t acc_range){
+
+	uint16_t Accel_X_int16 = byteTemp16[2]*256 + byteTemp16[1];
+	uint16_t Accel_Y_int16 = byteTemp16[4]*256 + byteTemp16[3];
+	uint16_t Accel_Z_int16 = byteTemp16[6]*256 + byteTemp16[5];
+
+	float Accel_X_in_mg = Accel_X_int16/32768*1000*(2^(acc_range + 1))*1.5;
+	float Accel_Y_in_mg = Accel_Y_int16/32768*1000*(2^(acc_range + 1))*1.5;
+	float Accel_Z_in_mg = Accel_Z_int16/32768*1000*(2^(acc_range + 1))*1.5;
+
+	float normal_acc = ((Accel_X_in_mg^2) + (Accel_X_in_mg^2) + (Accel_X_in_mg^2))^0.5;
+
+	return normal_acc;
+}
+
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
